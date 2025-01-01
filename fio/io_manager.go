@@ -15,4 +15,12 @@ type IOManager interface {
 
 	// Close closes the file.
 	Close() error
+
+	// Size returns the size of the file.
+	Size() (int64, error)
+}
+
+// NewIOManager creates a new I/O manager based on the file name.
+func NewIOManager(fileName string) (IOManager, error) {
+	return NewFileIOManager(fileName)
 }
