@@ -1,6 +1,9 @@
 package data
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"hash/crc32"
+)
 
 type LogRecordType = byte
 
@@ -34,15 +37,62 @@ type LogRecordPos struct {
 	Offset int64  // Offset in the file
 }
 
+// EncodeLogRecord encodes a log record to a byte slice.
 func EncodeLogRecord(logRecord *LogRecord) ([]byte, int64) {
-	return nil, 0
+	// Initialize the buffer with the maximum header size.
+	header := make([]byte, maxLogRecordHeaderSize)
+	// The fifth byte is the type of the log record.
+	header[4] = logRecord.Type
+	var index = 5
+	// Encode the key size.
+	index += binary.PutVarint(header[index:], int64(len(logRecord.Key)))
+	// Encode the value size.
+	index += binary.PutVarint(header[index:], int64(len(logRecord.Value)))
+
+	var size = index + len(logRecord.Key) + len(logRecord.Value)
+	encBytes := make([]byte, size)
+	copy(encBytes[:index], header[:index])
+	copy(encBytes[index:], logRecord.Key)
+	copy(encBytes[index+len(logRecord.Key):], logRecord.Value)
+
+	crc := crc32.ChecksumIEEE(encBytes[4:])
+	binary.LittleEndian.PutUint32(encBytes[:4], crc)
+
+	//fmt.Println("header length:", index, "crc:", crc, "key size:", len(logRecord.Key), "value size:", len(logRecord.Value))
+	return encBytes, int64(size)
 }
 
-// DecodeLogRecord decodes a log record from the given buffer.
-func DecodeLogRecord(buf []byte) (*LogRecordHeader, int64) {
-	return nil, 0
+// DecodeLogRecordHeader decodes a log record from the given buffer.
+func DecodeLogRecordHeader(buf []byte) (*LogRecordHeader, int64) {
+	if len(buf) < 4 {
+		return nil, 0
+	}
+
+	header := &LogRecordHeader{
+		crc:  binary.LittleEndian.Uint32(buf[:4]),
+		Type: buf[4],
+	}
+	var index = 5
+	// Get the key size.
+	keySize, keySizeLen := binary.Varint(buf[index:])
+	header.KeySize = uint32(keySize)
+	index += keySizeLen
+
+	// Get the value size.
+	valueSize, valueSizeLen := binary.Varint(buf[index:])
+	header.ValueSize = uint32(valueSize)
+	index += valueSizeLen
+
+	return header, int64(index)
 }
 
 func getLogRecordCRC(lr *LogRecord, header []byte) uint32 {
-	return 0
+	if lr == nil {
+		return 0
+	}
+
+	crc := crc32.ChecksumIEEE(header)
+	crc = crc32.Update(crc, crc32.IEEETable, lr.Key)
+	crc = crc32.Update(crc, crc32.IEEETable, lr.Value)
+	return crc
 }
