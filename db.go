@@ -55,6 +55,7 @@ func Open(options Options) (*DB, error) {
 	return db, nil
 }
 
+// Close closes the database.
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -72,6 +73,16 @@ func (db *DB) Close() error {
 		}
 	}
 	return nil
+}
+
+// Sync synchronizes the database with the disk.
+func (db *DB) Sync() error {
+	if db.activeFile == nil {
+		return nil
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	return db.activeFile.Sync()
 }
 
 // Put writes a key-value pair to the database. Key cannot be empty.

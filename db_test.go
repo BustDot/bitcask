@@ -10,9 +10,7 @@ import (
 // 测试完成之后销毁 DB 数据目录
 func destroyDB(db *DB) {
 	if db != nil {
-		if db.activeFile != nil {
-			_ = db.activeFile.Close() // todo 实现了 Close 方法之后，这里使用 Close 方法替代
-		}
+		_ = db.Close()
 		err := os.RemoveAll(db.options.DirPath)
 		if err != nil {
 			panic(err)
@@ -73,8 +71,9 @@ func TestDB_Put(t *testing.T) {
 	assert.Equal(t, 2, len(db.olderFiles))
 
 	// 6.重启后再 Put 数据
-	//db.Close() // todo 实现 Close 方法后这里用 Close() 替代
-	err = db.activeFile.Close()
+	if err := db.Close(); err != nil {
+		panic(err)
+	}
 	assert.Nil(t, err)
 
 	// 重启数据库
@@ -139,8 +138,9 @@ func TestDB_Get(t *testing.T) {
 	assert.NotNil(t, val5)
 
 	// 6.重启后，前面写入的数据都能拿到
-	//db.Close() // todo 实现 Close 方法后这里用 Close() 替代
-	err = db.activeFile.Close()
+	if err := db.Close(); err != nil {
+		panic(err)
+	}
 	assert.Nil(t, err)
 
 	// 重启数据库
@@ -199,8 +199,9 @@ func TestDB_Delete(t *testing.T) {
 	assert.Nil(t, err)
 
 	// 5.重启之后，再进行校验
-	//db.Close() // todo 实现 Close 方法后这里用 Close() 替代
-	err = db.activeFile.Close()
+	if err := db.Close(); err != nil {
+		panic(err)
+	}
 	assert.Nil(t, err)
 
 	// 重启数据库
@@ -270,5 +271,34 @@ func TestDB_Fold(t *testing.T) {
 		assert.NotNil(t, value)
 		return true
 	})
+	assert.Nil(t, err)
+}
+
+func TestDB_Close(t *testing.T) {
+	opts := DefaultOptions
+	dir, _ := os.MkdirTemp("", "bitcask-go-close")
+	opts.DirPath = dir
+	db, err := Open(opts)
+	defer destroyDB(db)
+	assert.Nil(t, err)
+	assert.NotNil(t, db)
+
+	err = db.Put(utils.GetTestKey(11), utils.RandomValue(20))
+	assert.Nil(t, err)
+}
+
+func TestDB_Sync(t *testing.T) {
+	opts := DefaultOptions
+	dir, _ := os.MkdirTemp("", "bitcask-go-sync")
+	opts.DirPath = dir
+	db, err := Open(opts)
+	defer destroyDB(db)
+	assert.Nil(t, err)
+	assert.NotNil(t, db)
+
+	err = db.Put(utils.GetTestKey(11), utils.RandomValue(20))
+	assert.Nil(t, err)
+
+	err = db.Sync()
 	assert.Nil(t, err)
 }
