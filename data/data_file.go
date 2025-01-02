@@ -22,7 +22,7 @@ type DataFile struct {
 
 // OpenDataFile opens a data file with the given path and file ID.
 func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
-	fileName := filepath.Join(fmt.Sprintf("%09d", fileId) + DataFileNameSuffix)
+	fileName := filepath.Join(dirPath, fmt.Sprintf("%09d", fileId)+DataFileNameSuffix)
 	ioManager, err := fio.NewIOManager(fileName)
 	if err != nil {
 		return nil, err
