@@ -56,19 +56,38 @@ func Open(options *Options) (*DB, error) {
 	return db, nil
 }
 
+func (db *DB) Close() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if db.activeFile != nil {
+		if err := db.activeFile.Close(); err != nil {
+			return err
+		}
+	}
+	for _, of := range db.olderFiles {
+		if of != nil {
+			if err := of.Close(); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Put writes a key-value pair to the database. Key cannot be empty.
 func (db *DB) Put(key []byte, value []byte) error {
 	if len(key) == 0 {
 		return ErrKeyIsEmpty
 	}
 
-	log_record := &data.LogRecord{
+	logRecord := &data.LogRecord{
 		Key:   key,
 		Value: value,
 		Type:  data.LogRecordNormal,
 	}
 
-	pos, err := db.appendLogRecord(log_record)
+	pos, err := db.appendLogRecord(logRecord)
 	if err != nil {
 		return err
 	}
@@ -161,7 +180,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 	// Encode the log record.
 	encRecord, size := data.EncodeLogRecord(logRecord)
 	// Check if the log record is too large. If it is, open a new data file.
-	if db.activeFile.WriteOffset+size > db.options.MaxLogFileSize {
+	if db.activeFile.WriteOffset+size > db.options.MaxDataFileSize {
 		// Persist the log record to the current data file.
 		if err := db.activeFile.Sync(); err != nil {
 			return nil, err
@@ -207,7 +226,7 @@ func checkOptions(options Options) error {
 	if options.DirPath == "" {
 		return ErrDirPathIsEmpty
 	}
-	if options.MaxLogFileSize <= 0 {
+	if options.MaxDataFileSize <= 0 {
 		return ErrMaxLogFileSizeInvalid
 	}
 	return nil
