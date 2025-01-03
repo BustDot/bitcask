@@ -9,5 +9,6 @@ var (
 	ErrDataFileNotFound       = errors.New("data file not found")
 	ErrDirPathIsEmpty         = errors.New("directory path is empty")
 	ErrMaxLogFileSizeInvalid  = errors.New("maximum log file size is invalid")
-	ErrDataDirectoryCorrupted = errors.New(" the database directory is corrupted")
+	ErrDataDirectoryCorrupted = errors.New("the database directory is corrupted")
+	ErrBatchTooLarge          = errors.New("write batch is too large")
 )

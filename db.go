@@ -3,6 +3,7 @@ package bitcask
 import (
 	"bitcask/data"
 	"bitcask/index"
+	"encoding/binary"
 	"io"
 	"os"
 	"sort"
@@ -18,6 +19,7 @@ type DB struct {
 	activeFile *data.DataFile            // The active data file, which is the file that is currently being written to.
 	olderFiles map[uint32]*data.DataFile // The older data files, which can only be read.
 	index      index.Indexer             // The index that maps keys to log record positions in memory.
+	seqNo      uint64                    // The transaction sequence number of the database.
 }
 
 // Open opens a database with the given options.
@@ -92,12 +94,12 @@ func (db *DB) Put(key []byte, value []byte) error {
 	}
 
 	logRecord := &data.LogRecord{
-		Key:   key,
+		Key:   logRecordKeyWithSeq(key, nonTransactionSeqNo),
 		Value: value,
 		Type:  data.LogRecordNormal,
 	}
 
-	pos, err := db.appendLogRecord(logRecord)
+	pos, err := db.appendLogRecordWithLock(logRecord)
 	if err != nil {
 		return err
 	}
@@ -137,12 +139,12 @@ func (db *DB) Delete(key []byte) error {
 	}
 
 	logRecord := &data.LogRecord{
-		Key:   key,
+		Key:   logRecordKeyWithSeq(key, nonTransactionSeqNo),
 		Value: nil,
-		Type:  data.LogRecordDelete,
+		Type:  data.LogRecordDeleted,
 	}
 
-	_, err := db.appendLogRecord(logRecord)
+	_, err := db.appendLogRecordWithLock(logRecord)
 	if err != nil {
 		return err
 	}
@@ -204,17 +206,20 @@ func (db *DB) getValueByPosition(logRecordPos *data.LogRecordPos) ([]byte, error
 		return nil, err
 	}
 
-	if logRecord.Type == data.LogRecordDelete {
+	if logRecord.Type == data.LogRecordDeleted {
 		return nil, ErrKeyNotFound
 	}
 	return logRecord.Value, nil
 }
 
-// appendLogRecord appends a log record to the active data file.
-func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
+func (db *DB) appendLogRecordWithLock(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+	return db.appendLogRecord(logRecord)
+}
 
+// appendLogRecord appends a log record to the active data file.
+func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, error) {
 	// Init the log file if it doesn't exist.
 	if db.activeFile == nil {
 		if err := db.setActiveFile(); err != nil {
@@ -319,12 +324,30 @@ func (db *DB) loadDataFiles() error {
 
 // loadIndexFromDataFiles loads the index from the data files.
 func (db *DB) loadIndexFromDataFiles() error {
-	// 没有文件，说明数据库是空的，直接返回
 	if len(db.fileIds) == 0 {
 		return nil
 	}
 
-	// 遍历所有的文件id，处理文件中的记录
+	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
+		var ok bool
+		switch typ {
+		case data.LogRecordNormal:
+			ok = db.index.Put(key, pos)
+		case data.LogRecordDeleted:
+			ok = db.index.Delete(key)
+		default:
+			ok = false
+		}
+		if !ok {
+			panic("failed to update index at startup")
+		}
+	}
+
+	// Temporary store the transaction records
+	transactionRecords := make(map[uint64][]*data.TransactionRecord)
+	var currentSeqNo uint64 = nonTransactionSeqNo
+
+	// Traverse all the data files and read the log records from them.
 	for i, fid := range db.fileIds {
 		var fileId = uint32(fid)
 		var dataFile *data.DataFile
@@ -344,26 +367,51 @@ func (db *DB) loadIndexFromDataFiles() error {
 				return err
 			}
 
-			// 构造内存索引并保存
+			// Build the index
 			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset}
-			var ok bool
-			if logRecord.Type == data.LogRecordDelete {
-				ok = db.index.Delete(logRecord.Key)
-			} else {
-				ok = db.index.Put(logRecord.Key, logRecordPos)
-			}
-			if !ok {
-				return ErrIndexUpdateFailed
+
+			// Get the sequence number of the log record key
+			realKey, seqNo := parseLogRecordKey(logRecord.Key)
+			if seqNo == nonTransactionSeqNo { // non-transaction log record
+				updateIndex(realKey, logRecord.Type, logRecordPos)
+			} else { // transaction log record
+				// Txn has finished
+				if logRecord.Type == data.LogRecordTxnFinished {
+					for _, txnRecord := range transactionRecords[seqNo] {
+						updateIndex(txnRecord.Record.Key, txnRecord.Record.Type, txnRecord.Pos)
+					}
+					delete(transactionRecords, seqNo)
+				} else {
+					logRecord.Key = realKey
+					transactionRecords[seqNo] = append(transactionRecords[seqNo], &data.TransactionRecord{
+						Record: logRecord,
+						Pos:    logRecordPos,
+					})
+				}
 			}
 
-			// 递增 offset，下一次从新的位置开始读取
+			// Update the seqNo
+			if seqNo > currentSeqNo {
+				currentSeqNo = seqNo
+			}
+
+			// Move to the next log record
 			offset += size
 		}
 
-		// 如果是当前活跃文件，更新这个文件的 WriteOff
+		// Update the write offset of the active data file
 		if i == len(db.fileIds)-1 {
 			db.activeFile.WriteOffset = offset
 		}
 	}
+
+	// Update the sequence number
+	db.seqNo = currentSeqNo
 	return nil
+}
+
+// parseLogRecordKey parses the log record key and returns the key and the sequence number.
+func parseLogRecordKey(key []byte) ([]byte, uint64) {
+	seqNo, n := binary.Uvarint(key)
+	return key[n:], seqNo
 }

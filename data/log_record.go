@@ -9,7 +9,8 @@ type LogRecordType = byte
 
 const (
 	LogRecordNormal LogRecordType = iota
-	LogRecordDelete
+	LogRecordDeleted
+	LogRecordTxnFinished
 )
 
 // crc type keySize valueSize
@@ -35,6 +36,12 @@ type LogRecordHeader struct {
 type LogRecordPos struct {
 	Fid    uint32 // File ID
 	Offset int64  // Offset in the file
+}
+
+// TransactionRecord is a struct that temporarily store a transaction record.
+type TransactionRecord struct {
+	Record *LogRecord
+	Pos    *LogRecordPos
 }
 
 // EncodeLogRecord encodes a log record to a byte slice.

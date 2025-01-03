@@ -14,6 +14,12 @@ type IteratorOptions struct {
 	Reverse bool   // Reverse the iteration order
 }
 
+// WriteBatchOptions specifies the options for a write batch.
+type WriteBatchOptions struct {
+	MaxBatchNum uint // Maximum number of entries in a batch
+	SyncWrites  bool // Whether to sync writes to disk when committing a batch
+}
+
 type IndexerType = int8
 
 const (
@@ -31,4 +37,9 @@ var DefaultOptions = Options{
 var DefaultIteratorOptions = &IteratorOptions{
 	Prefix:  nil,
 	Reverse: false,
+}
+
+var DefaultWriteBatchOptions = WriteBatchOptions{
+	MaxBatchNum: 10000,
+	SyncWrites:  true,
 }

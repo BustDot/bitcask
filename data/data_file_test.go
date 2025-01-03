@@ -94,7 +94,7 @@ func TestDataFile_ReadLogRecord(t *testing.T) {
 	rec3 := &LogRecord{
 		Key:   []byte("1"),
 		Value: []byte(""),
-		Type:  LogRecordDelete,
+		Type:  LogRecordDeleted,
 	}
 	res3, size3 := EncodeLogRecord(rec3)
 	err = dataFile.Write(res3)
