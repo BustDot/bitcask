@@ -69,6 +69,27 @@ func EncodeLogRecord(logRecord *LogRecord) ([]byte, int64) {
 	return encBytes, int64(size)
 }
 
+// EncodeLogRecordPos encodes a log record position to a byte slice.
+func EncodeLogRecordPos(pos *LogRecordPos) []byte {
+	buf := make([]byte, binary.MaxVarintLen32+binary.MaxVarintLen64)
+	var index = 0
+	index += binary.PutVarint(buf[index:], int64(pos.Fid))
+	index += binary.PutVarint(buf[index:], pos.Offset)
+	return buf[:index]
+}
+
+// DecodeLogRecordPos decodes a log record position from the given buffer.
+func DecodeLogRecordPos(buf []byte) *LogRecordPos {
+	var index = 0
+	fileId, n := binary.Varint(buf[index:])
+	index += n
+	offset, _ := binary.Varint(buf[index:])
+	return &LogRecordPos{
+		Fid:    uint32(fileId),
+		Offset: offset,
+	}
+}
+
 // DecodeLogRecordHeader decodes a log record from the given buffer.
 func DecodeLogRecordHeader(buf []byte) (*LogRecordHeader, int64) {
 	if len(buf) < 4 {

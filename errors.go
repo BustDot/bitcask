@@ -11,4 +11,5 @@ var (
 	ErrMaxLogFileSizeInvalid  = errors.New("maximum log file size is invalid")
 	ErrDataDirectoryCorrupted = errors.New("the database directory is corrupted")
 	ErrBatchTooLarge          = errors.New("write batch is too large")
+	ErrMergeIsInProgress      = errors.New("merge is already in progress")
 )

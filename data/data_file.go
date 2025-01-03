@@ -12,7 +12,11 @@ var (
 	ErrInvalidCRC = fmt.Errorf("invalid CRC")
 )
 
-const DataFileNameSuffix = ".data" // Data file name suffix
+const (
+	DataFileNameSuffix    = ".data" // Data file name suffix
+	HintFileName          = "hint-index"
+	MergeFinishedFileName = "merge-finished"
+)
 
 type DataFile struct {
 	FileId      uint32        // File ID
@@ -22,7 +26,26 @@ type DataFile struct {
 
 // OpenDataFile opens a data file with the given path and file ID.
 func OpenDataFile(dirPath string, fileId uint32) (*DataFile, error) {
-	fileName := filepath.Join(dirPath, fmt.Sprintf("%09d", fileId)+DataFileNameSuffix)
+	fileName := GetDataFileName(dirPath, fileId)
+	return newDataFile(fileName, fileId)
+}
+
+// OpenHintFile opens the hint file in the given directory.
+func OpenHintFile(dirPath string) (*DataFile, error) {
+	fileName := filepath.Join(dirPath, HintFileName)
+	return newDataFile(fileName, 0)
+}
+
+func OpenMergeFinishedFile(dirPath string) (*DataFile, error) {
+	fileName := filepath.Join(dirPath, MergeFinishedFileName)
+	return newDataFile(fileName, 0)
+}
+
+func GetDataFileName(dirPath string, fileId uint32) string {
+	return filepath.Join(dirPath, fmt.Sprintf("%09d", fileId)+DataFileNameSuffix)
+}
+
+func newDataFile(fileName string, fileId uint32) (*DataFile, error) {
 	ioManager, err := fio.NewIOManager(fileName)
 	if err != nil {
 		return nil, err
@@ -90,6 +113,16 @@ func (df *DataFile) Write(b []byte) error {
 	}
 	df.WriteOffset += int64(n)
 	return nil
+}
+
+// WriteHintRecord writes a hint record to the hint file.
+func (df *DataFile) WriteHintRecord(key []byte, pos *LogRecordPos) error {
+	record := &LogRecord{
+		Key:   key,
+		Value: EncodeLogRecordPos(pos),
+	}
+	encRecord, _ := EncodeLogRecord(record)
+	return df.Write(encRecord)
 }
 
 // Sync synchronizes the file's in-memory state with the underlying storage device.

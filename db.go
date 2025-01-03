@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ type DB struct {
 	olderFiles map[uint32]*data.DataFile // The older data files, which can only be read.
 	index      index.Indexer             // The index that maps keys to log record positions in memory.
 	seqNo      uint64                    // The transaction sequence number of the database.
+	isMerging  bool                      // Whether the database is merging the data files.
 }
 
 // Open opens a database with the given options.
@@ -44,8 +46,18 @@ func Open(options Options) (*DB, error) {
 		index:      index.NewIndexer(options.IndexType),
 	}
 
+	// Load merge data files if they exist.
+	if err := db.loadMergeFiles(); err != nil {
+		return nil, err
+	}
+
 	// Load the data files.
 	if err := db.loadDataFiles(); err != nil {
+		return nil, err
+	}
+
+	// Load the index from the hint files
+	if err := db.loadIndexFromHintFile(); err != nil {
 		return nil, err
 	}
 
@@ -328,6 +340,18 @@ func (db *DB) loadIndexFromDataFiles() error {
 		return nil
 	}
 
+	// Check if the merge finished file exists
+	hasMerge, nonMergeFileId := false, uint32(0)
+	mergeFinFileName := filepath.Join(db.options.DirPath, data.MergeFinishedFileName)
+	if _, err := os.Stat(mergeFinFileName); err == nil {
+		fid, err := db.getNonMergeFileId(db.options.DirPath)
+		if err != nil {
+			return err
+		}
+		hasMerge = true
+		nonMergeFileId = fid
+	}
+
 	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
 		var ok bool
 		switch typ {
@@ -350,6 +374,10 @@ func (db *DB) loadIndexFromDataFiles() error {
 	// Traverse all the data files and read the log records from them.
 	for i, fid := range db.fileIds {
 		var fileId = uint32(fid)
+		// Skip the data files that are older than the non-merge file
+		if hasMerge && fileId < nonMergeFileId {
+			continue
+		}
 		var dataFile *data.DataFile
 		if fileId == db.activeFile.FileId {
 			dataFile = db.activeFile
