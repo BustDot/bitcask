@@ -25,6 +25,7 @@ type IndexerType = int8
 const (
 	BTree IndexerType = iota + 1
 	ART
+	BPTree // B+ tree, it will persist the index to disk
 )
 
 var DefaultOptions = Options{

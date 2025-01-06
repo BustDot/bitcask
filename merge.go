@@ -170,6 +170,10 @@ func (db *DB) loadMergeFiles() error {
 		if entry.Name() == data.MergeFinishedFileName {
 			mergeFinished = true
 		}
+		// There's no need to copy the sequence number file
+		if entry.Name() == data.SeqNoFileName {
+			continue
+		}
 		mergeFileNames = append(mergeFileNames, entry.Name())
 	}
 

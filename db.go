@@ -13,15 +13,19 @@ import (
 	"sync"
 )
 
+const seqNoKey = "seq.no"
+
 type DB struct {
-	options    Options
-	mu         *sync.RWMutex
-	fileIds    []int                     // The file IDs of the data files, can be only used for initial index.
-	activeFile *data.DataFile            // The active data file, which is the file that is currently being written to.
-	olderFiles map[uint32]*data.DataFile // The older data files, which can only be read.
-	index      index.Indexer             // The index that maps keys to log record positions in memory.
-	seqNo      uint64                    // The transaction sequence number of the database.
-	isMerging  bool                      // Whether the database is merging the data files.
+	options         Options
+	mu              *sync.RWMutex
+	fileIds         []int                     // The file IDs of the data files, can be only used for initial index.
+	activeFile      *data.DataFile            // The active data file, which is the file that is currently being written to.
+	olderFiles      map[uint32]*data.DataFile // The older data files, which can only be read.
+	index           index.Indexer             // The index that maps keys to log record positions in memory.
+	seqNo           uint64                    // The transaction sequence number of the database.
+	isMerging       bool                      // Whether the database is merging the data files.
+	seqNoFileExists bool                      // Whether the seqNo file exists
+	isInitial       bool                      // Whether the database is initializing for the first time
 }
 
 // Open opens a database with the given options.
@@ -31,11 +35,21 @@ func Open(options Options) (*DB, error) {
 		return nil, err
 	}
 
+	var isInitial bool
 	// Check if the directory exists. If not, create it.
 	if _, err := os.Stat(options.DirPath); os.IsNotExist(err) {
+		isInitial = true
 		if err := os.MkdirAll(options.DirPath, os.ModePerm); err != nil {
 			return nil, err
 		}
+	}
+	// Check if the directory is empty. If it is, set isInitial to true.
+	entries, err := os.ReadDir(options.DirPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		isInitial = true
 	}
 
 	// Initialize the DB instance.
@@ -43,7 +57,8 @@ func Open(options Options) (*DB, error) {
 		options:    options,
 		mu:         new(sync.RWMutex),
 		olderFiles: make(map[uint32]*data.DataFile),
-		index:      index.NewIndexer(options.IndexType),
+		index:      index.NewIndexer(options.IndexType, options.DirPath, options.SyncWrites),
+		isInitial:  isInitial,
 	}
 
 	// Load merge data files if they exist.
@@ -56,14 +71,31 @@ func Open(options Options) (*DB, error) {
 		return nil, err
 	}
 
-	// Load the index from the hint files
-	if err := db.loadIndexFromHintFile(); err != nil {
-		return nil, err
+	// There's no need to load the index from the data files if the index type is B+ tree.
+	if options.IndexType != BPTree {
+		// Load the index from the hint files
+		if err := db.loadIndexFromHintFile(); err != nil {
+			return nil, err
+		}
+
+		// Load the index from the data files.
+		if err := db.loadIndexFromDataFiles(); err != nil {
+			return nil, err
+		}
 	}
 
-	// Load the index from the data files.
-	if err := db.loadIndexFromDataFiles(); err != nil {
-		return nil, err
+	// Load the sequence number from the seqNo file.
+	if options.IndexType == BPTree {
+		if err := db.loadSeqNo(); err != nil {
+			return nil, err
+		}
+		if db.activeFile != nil {
+			size, err := db.activeFile.IOManager.Size()
+			if err != nil {
+				return nil, err
+			}
+			db.activeFile.WriteOffset = size
+		}
 	}
 
 	return db, nil
@@ -73,6 +105,28 @@ func Open(options Options) (*DB, error) {
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
+
+	// Close the index.
+	if err := db.index.Close(); err != nil {
+		return err
+	}
+
+	// Save the current seqNo to the seqNo file.
+	seqNoFile, err := data.OpenSeqNoFile(db.options.DirPath)
+	if err != nil {
+		return err
+	}
+	record := &data.LogRecord{
+		Key:   []byte(seqNoKey),
+		Value: []byte(strconv.FormatUint(db.seqNo, 10)),
+	}
+	encRecord, _ := data.EncodeLogRecord(record)
+	if err := seqNoFile.Write(encRecord); err != nil {
+		return err
+	}
+	if err := seqNoFile.Sync(); err != nil {
+		return err
+	}
 
 	if db.activeFile != nil {
 		if err := db.activeFile.Close(); err != nil {
@@ -187,6 +241,7 @@ func (db *DB) Fold(fn func(key []byte, value []byte) bool) error {
 	defer db.mu.RUnlock()
 
 	iterator := db.index.Iterator(false)
+	defer iterator.Close()
 	for iterator.Rewind(); iterator.Valid(); iterator.Next() {
 		key := iterator.Key()
 		value, err := db.getValueByPosition(iterator.Value())
@@ -442,4 +497,27 @@ func (db *DB) loadIndexFromDataFiles() error {
 func parseLogRecordKey(key []byte) ([]byte, uint64) {
 	seqNo, n := binary.Uvarint(key)
 	return key[n:], seqNo
+}
+
+func (db *DB) loadSeqNo() error {
+	fileName := filepath.Join(db.options.DirPath, data.SeqNoFileName)
+	if _, err := os.Stat(fileName); os.IsNotExist(err) {
+		return nil
+	}
+
+	seqNoFile, err := data.OpenSeqNoFile(db.options.DirPath)
+	if err != nil {
+		return err
+	}
+	record, _, err := seqNoFile.ReadLogRecord(0)
+	if err != nil {
+		return err
+	}
+	seqNo, err := strconv.ParseUint(string(record.Value), 10, 64)
+	if err != nil {
+		return err
+	}
+	db.seqNo = seqNo
+	db.seqNoFileExists = true
+	return os.Remove(fileName)
 }

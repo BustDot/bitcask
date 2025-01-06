@@ -22,6 +22,9 @@ type Indexer interface {
 
 	// Iterator returns an iterator for the index.
 	Iterator(reverse bool) Iterator
+
+	// Close closes the index.
+	Close() error
 }
 
 type IndexType = int8
@@ -29,15 +32,18 @@ type IndexType = int8
 const (
 	BTree IndexType = iota + 1
 	ART
+	BPTree
 )
 
 // NewIndexer creates a new index based on the index type.
-func NewIndexer(typ IndexType) Indexer {
+func NewIndexer(typ IndexType, dirPath string, sync bool) Indexer {
 	switch typ {
 	case BTree:
 		return NewBtree()
 	case ART:
 		return NewART()
+	case BPTree:
+		return NewBPlusTree(dirPath, sync)
 	default:
 		panic("unsupported index type")
 	}

@@ -50,6 +50,10 @@ func (art *AdaptiveRadixTree) Size() int {
 	return art.tree.Size()
 }
 
+func (art *AdaptiveRadixTree) Close() error {
+	return nil
+}
+
 func (art *AdaptiveRadixTree) Iterator(reverse bool) Iterator {
 	art.lock.RLock()
 	defer art.lock.RUnlock()
