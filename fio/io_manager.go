@@ -1,6 +1,13 @@
 package fio
 
-const DATA_FILE_PERM = 0644
+const DataFilePerm = 0644
+
+type FileIOType = byte
+
+const (
+	StandardFIO  FileIOType = iota // Standard file I/O
+	MemoryMapFIO                   // Memory-mapped file I/O
+)
 
 // IOManager is an interface that defines the methods of an I/O manager.
 type IOManager interface {
@@ -21,6 +28,13 @@ type IOManager interface {
 }
 
 // NewIOManager creates a new I/O manager based on the file name.
-func NewIOManager(fileName string) (IOManager, error) {
-	return NewFileIOManager(fileName)
+func NewIOManager(fileName string, ioType FileIOType) (IOManager, error) {
+	switch ioType {
+	case MemoryMapFIO:
+		return NewMMapIOManager(fileName)
+	case StandardFIO:
+		return NewFileIOManager(fileName)
+	default:
+		panic("unknown I/O type")
+	}
 }

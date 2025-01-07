@@ -9,7 +9,7 @@ type FileIO struct {
 
 // NewFileIOManager creates a new FileIO instance.
 func NewFileIOManager(fileName string) (*FileIO, error) {
-	fd, err := os.OpenFile(fileName, os.O_CREATE|os.O_RDWR|os.O_APPEND, DATA_FILE_PERM)
+	fd, err := os.OpenFile(fileName, os.O_CREATE|os.O_RDWR|os.O_APPEND, DataFilePerm)
 	if err != nil {
 		return nil, err
 	}

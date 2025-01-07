@@ -2,6 +2,7 @@ package bitcask
 
 import (
 	"bitcask/data"
+	"bitcask/fio"
 	"bitcask/index"
 	"encoding/binary"
 	"fmt"
@@ -32,6 +33,7 @@ type DB struct {
 	seqNoFileExists bool                      // Whether the seqNo file exists
 	isInitial       bool                      // Whether the database is initializing for the first time
 	fileLock        *flock.Flock              // The file lock to prevent multiple processes from opening the same database
+	bytesWrite      uint                      // The number of bytes written to the active data file
 }
 
 // Open opens a database with the given options.
@@ -99,6 +101,13 @@ func Open(options Options) (*DB, error) {
 		// Load the index from the data files.
 		if err := db.loadIndexFromDataFiles(); err != nil {
 			return nil, err
+		}
+
+		// Reset the IOType to standard FIO
+		if db.options.MMapAtStartup {
+			if err := db.resetIOType(); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -335,10 +344,20 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 	if err := db.activeFile.Write(encRecord); err != nil {
 		return nil, err
 	}
+
+	db.bytesWrite += uint(size)
 	// Persist the log record to the disk if SyncWrites is enabled.
-	if db.options.SyncWrites {
+	var needSync = db.options.SyncWrites
+	if !needSync && db.bytesWrite >= db.options.BytesPerSync {
+		needSync = true
+	}
+	if needSync {
 		if err := db.activeFile.Sync(); err != nil {
 			return nil, err
+		}
+		// Reset the bytesWrite counter
+		if db.bytesWrite > 0 {
+			db.bytesWrite = 0
 		}
 	}
 
@@ -354,7 +373,7 @@ func (db *DB) setActiveFile() error {
 		initialFileId = db.activeFile.FileId + 1
 	}
 
-	dataFile, err := data.OpenDataFile(db.options.DirPath, initialFileId)
+	dataFile, err := data.OpenDataFile(db.options.DirPath, initialFileId, fio.StandardFIO)
 	if err != nil {
 		return err
 	}
@@ -398,8 +417,12 @@ func (db *DB) loadDataFiles() error {
 	db.fileIds = fileIds
 
 	// 遍历每个文件id，打开对应的数据文件
+	ioType := fio.StandardFIO
+	if db.options.MMapAtStartup {
+		ioType = fio.MemoryMapFIO
+	}
 	for i, fid := range fileIds {
-		dataFile, err := data.OpenDataFile(db.options.DirPath, uint32(fid))
+		dataFile, err := data.OpenDataFile(db.options.DirPath, uint32(fid), ioType)
 		if err != nil {
 			return err
 		}
@@ -543,4 +566,20 @@ func (db *DB) loadSeqNo() error {
 	db.seqNo = seqNo
 	db.seqNoFileExists = true
 	return os.Remove(fileName)
+}
+
+// resetIOType resets the IO type of the data files to standard FIO.
+func (db *DB) resetIOType() error {
+	if db.activeFile == nil {
+		return nil
+	}
+	if err := db.activeFile.SetIOManager(db.options.DirPath, fio.StandardFIO); err != nil {
+		return err
+	}
+	for _, of := range db.olderFiles {
+		if err := of.SetIOManager(db.options.DirPath, fio.StandardFIO); err != nil {
+			return err
+		}
+	}
+	return nil
 }
