@@ -4,6 +4,8 @@ import (
 	"bitcask/data"
 	"bitcask/index"
 	"encoding/binary"
+	"fmt"
+	"github.com/gofrs/flock"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,7 +15,10 @@ import (
 	"sync"
 )
 
-const seqNoKey = "seq.no"
+const (
+	seqNoKey     = "seq.no"
+	fileLockName = "bitcask.lock"
+)
 
 type DB struct {
 	options         Options
@@ -26,6 +31,7 @@ type DB struct {
 	isMerging       bool                      // Whether the database is merging the data files.
 	seqNoFileExists bool                      // Whether the seqNo file exists
 	isInitial       bool                      // Whether the database is initializing for the first time
+	fileLock        *flock.Flock              // The file lock to prevent multiple processes from opening the same database
 }
 
 // Open opens a database with the given options.
@@ -43,6 +49,17 @@ func Open(options Options) (*DB, error) {
 			return nil, err
 		}
 	}
+
+	// Check if the current directory is opened by another process.
+	fileLock := flock.New(filepath.Join(options.DirPath, fileLockName))
+	locked, err := fileLock.TryLock()
+	if err != nil {
+		return nil, err
+	}
+	if !locked {
+		return nil, ErrDatabaseLocked
+	}
+
 	// Check if the directory is empty. If it is, set isInitial to true.
 	entries, err := os.ReadDir(options.DirPath)
 	if err != nil {
@@ -59,6 +76,7 @@ func Open(options Options) (*DB, error) {
 		olderFiles: make(map[uint32]*data.DataFile),
 		index:      index.NewIndexer(options.IndexType, options.DirPath, options.SyncWrites),
 		isInitial:  isInitial,
+		fileLock:   fileLock,
 	}
 
 	// Load merge data files if they exist.
@@ -103,6 +121,11 @@ func Open(options Options) (*DB, error) {
 
 // Close closes the database.
 func (db *DB) Close() error {
+	defer func() {
+		if err := db.fileLock.Unlock(); err != nil {
+			panic(fmt.Sprintf("failed to unlock the file lock: %v", err))
+		}
+	}()
 	db.mu.Lock()
 	defer db.mu.Unlock()
 

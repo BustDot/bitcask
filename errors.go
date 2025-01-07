@@ -12,4 +12,5 @@ var (
 	ErrDataDirectoryCorrupted = errors.New("the database directory is corrupted")
 	ErrBatchTooLarge          = errors.New("write batch is too large")
 	ErrMergeIsInProgress      = errors.New("merge is already in progress")
+	ErrDatabaseLocked         = errors.New("database is locked by another process")
 )
