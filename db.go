@@ -135,6 +135,9 @@ func (db *DB) Close() error {
 			panic(fmt.Sprintf("failed to unlock the file lock: %v", err))
 		}
 	}()
+	if db.activeFile == nil {
+		return nil
+	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -348,7 +351,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 	db.bytesWrite += uint(size)
 	// Persist the log record to the disk if SyncWrites is enabled.
 	var needSync = db.options.SyncWrites
-	if !needSync && db.bytesWrite >= db.options.BytesPerSync {
+	if !needSync && db.options.BytesPerSync > 0 && db.bytesWrite >= db.options.BytesPerSync {
 		needSync = true
 	}
 	if needSync {
