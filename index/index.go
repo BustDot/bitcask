@@ -9,13 +9,13 @@ import (
 // Indexer is an interface that defines the methods of an index.
 type Indexer interface {
 	// Put inserts a key and its position into the index.
-	Put(key []byte, pos *data.LogRecordPos) bool
+	Put(key []byte, pos *data.LogRecordPos) *data.LogRecordPos
 
 	// Get retrieves the position of a key from the index.
 	Get(key []byte) *data.LogRecordPos
 
 	// Delete deletes a key from the index.
-	Delete(key []byte) bool
+	Delete(key []byte) (*data.LogRecordPos, bool)
 
 	// Size returns the number of keys in the index.
 	Size() int

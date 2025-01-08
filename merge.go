@@ -2,6 +2,7 @@ package bitcask
 
 import (
 	"bitcask/data"
+	"bitcask/utils"
 	"io"
 	"os"
 	"path"
@@ -15,14 +16,38 @@ const (
 	mergeFinishedKey = "merge.finished"
 )
 
+// Merge cleans up datafiles and generates hint files.
 func (db *DB) Merge() error {
 	if db.activeFile == nil {
 		return nil
 	}
 	db.mu.Lock()
+	// If a merge is already in progress, return an error
 	if db.isMerging {
 		db.mu.Unlock()
 		return ErrMergeIsInProgress
+	}
+
+	// Check if the merge ratio is reached
+	totalSize, err := utils.DirSize(db.options.DirPath)
+	if err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	if float32(db.reclaimableSize)/float32(totalSize) < db.options.DataFileMergeRatio {
+		db.mu.Unlock()
+		return ErrMergeRatioUnreached
+	}
+
+	// Check if the available disk space is enough
+	availableDiskSize, err := utils.AvailableDiskSize()
+	if err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	if uint64(totalSize-db.reclaimableSize) >= availableDiskSize {
+		db.mu.Unlock()
+		return ErrDiskSpaceNotEnough
 	}
 
 	db.isMerging = true
@@ -37,13 +62,15 @@ func (db *DB) Merge() error {
 	}
 
 	db.olderFiles[db.activeFile.FileId] = db.activeFile
+	// Open a new data file to save the new data for the ongoing query
 	if err := db.setActiveFile(); err != nil {
 		db.mu.Unlock()
-		return err
+		return nil
 	}
+	// Get the file id of the non-merge file
 	nonMergeFileId := db.activeFile.FileId
 
-	// Get all the files to merge
+	// Merge the data files
 	var mergeFiles []*data.DataFile
 	for _, file := range db.olderFiles {
 		mergeFiles = append(mergeFiles, file)
@@ -62,8 +89,8 @@ func (db *DB) Merge() error {
 			return err
 		}
 	}
-	err := os.MkdirAll(mergePath, os.ModePerm)
-	if err != nil {
+	// Create the merge directory
+	if err := os.MkdirAll(mergePath, os.ModePerm); err != nil {
 		return err
 	}
 	// Get a new DB instance for the merge operation
@@ -174,6 +201,9 @@ func (db *DB) loadMergeFiles() error {
 		if entry.Name() == data.SeqNoFileName {
 			continue
 		}
+		if entry.Name() == fileLockName {
+			continue
+		}
 		mergeFileNames = append(mergeFileNames, entry.Name())
 	}
 
@@ -190,7 +220,7 @@ func (db *DB) loadMergeFiles() error {
 	// Remove files that are older than the non-merge file
 	var fileId uint32 = 0
 	for ; fileId < nonMergeFileId; fileId++ {
-		fileName := data.GetDataFileName(mergePath, fileId)
+		fileName := data.GetDataFileName(db.options.DirPath, fileId)
 		if _, err := os.Stat(fileName); err == nil {
 			if err := os.Remove(fileName); err != nil {
 				return err
@@ -225,12 +255,13 @@ func (db *DB) getNonMergeFileId(dirPath string) (uint32, error) {
 	return uint32(nonMergeFileId), nil
 }
 
-// loadIndexFromMergeFiles loads the index from the hint files.
+// loadIndexFromHintFile loads the index from the hint files.
 func (db *DB) loadIndexFromHintFile() error {
 	hintFileName := filepath.Join(db.options.DirPath, data.HintFileName)
 	if _, err := os.Stat(hintFileName); os.IsNotExist(err) {
 		return nil
 	}
+
 	hintFile, err := data.OpenHintFile(db.options.DirPath)
 	if err != nil {
 		return err

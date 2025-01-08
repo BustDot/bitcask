@@ -4,6 +4,7 @@ import (
 	"bitcask/data"
 	"bitcask/fio"
 	"bitcask/index"
+	"bitcask/utils"
 	"encoding/binary"
 	"fmt"
 	"github.com/gofrs/flock"
@@ -34,6 +35,15 @@ type DB struct {
 	isInitial       bool                      // Whether the database is initializing for the first time
 	fileLock        *flock.Flock              // The file lock to prevent multiple processes from opening the same database
 	bytesWrite      uint                      // The number of bytes written to the active data file
+	reclaimableSize int64                     // The size of the reclaimable data in the data files
+}
+
+// Stat represents the statistics of the database.
+type Stat struct {
+	KeyNum          uint  // The number of keys in the database.
+	DataFileNum     uint  // The number of data files.
+	ReclaimableSize int64 // The size of the reclaimable data which can be reclaimed by merge, count in Byte.
+	DiskSize        int64 // The size of the database on the disk, count in Byte.
 }
 
 // Open opens a database with the given options.
@@ -188,6 +198,28 @@ func (db *DB) Sync() error {
 	return db.activeFile.Sync()
 }
 
+// Stat returns the statistics of the database.
+func (db *DB) Stat() *Stat {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	var dataFiles = uint(len(db.olderFiles))
+	if db.activeFile != nil {
+		dataFiles += 1
+	}
+
+	dirSize, err := utils.DirSize(db.options.DirPath)
+	if err != nil {
+		panic(fmt.Sprintf("failed to get dir size : %v", err))
+	}
+	return &Stat{
+		KeyNum:          uint(db.index.Size()),
+		DataFileNum:     dataFiles,
+		ReclaimableSize: db.reclaimableSize,
+		DiskSize:        dirSize,
+	}
+}
+
 // Put writes a key-value pair to the database. Key cannot be empty.
 func (db *DB) Put(key []byte, value []byte) error {
 	if len(key) == 0 {
@@ -206,8 +238,8 @@ func (db *DB) Put(key []byte, value []byte) error {
 	}
 
 	// Update the index.
-	if ok := db.index.Put(key, pos); !ok {
-		return ErrIndexUpdateFailed
+	if oldPos := db.index.Put(key, pos); oldPos != nil {
+		db.reclaimableSize += int64(oldPos.Size)
 	}
 	return nil
 }
@@ -245,15 +277,19 @@ func (db *DB) Delete(key []byte) error {
 		Type:  data.LogRecordDeleted,
 	}
 
-	_, err := db.appendLogRecordWithLock(logRecord)
+	pos, err := db.appendLogRecordWithLock(logRecord)
 	if err != nil {
 		return err
 	}
+	db.reclaimableSize += int64(pos.Size)
 
 	// Update the index.
-	ok := db.index.Delete(key)
+	oldPos, ok := db.index.Delete(key)
 	if !ok {
 		return ErrIndexUpdateFailed
+	}
+	if oldPos != nil {
+		db.reclaimableSize += int64(oldPos.Size)
 	}
 	return nil
 }
@@ -364,7 +400,7 @@ func (db *DB) appendLogRecord(logRecord *data.LogRecord) (*data.LogRecordPos, er
 		}
 	}
 
-	pos := &data.LogRecordPos{Fid: db.activeFile.FileId, Offset: writeOff}
+	pos := &data.LogRecordPos{Fid: db.activeFile.FileId, Offset: writeOff, Size: uint32(size)}
 	return pos, nil
 }
 
@@ -390,6 +426,9 @@ func checkOptions(options Options) error {
 	}
 	if options.MaxDataFileSize <= 0 {
 		return ErrMaxLogFileSizeInvalid
+	}
+	if options.DataFileMergeRatio < 0 || options.DataFileMergeRatio > 1 {
+		return ErrDataFileMergeRatioInvalid
 	}
 	return nil
 }
@@ -457,17 +496,18 @@ func (db *DB) loadIndexFromDataFiles() error {
 	}
 
 	updateIndex := func(key []byte, typ data.LogRecordType, pos *data.LogRecordPos) {
-		var ok bool
+		var oldPos *data.LogRecordPos
 		switch typ {
 		case data.LogRecordNormal:
-			ok = db.index.Put(key, pos)
+			oldPos = db.index.Put(key, pos)
 		case data.LogRecordDeleted:
-			ok = db.index.Delete(key)
+			oldPos, _ = db.index.Delete(key)
+			db.reclaimableSize += int64(pos.Size)
 		default:
-			ok = false
+			panic("unsupported log record type")
 		}
-		if !ok {
-			panic("failed to update index at startup")
+		if oldPos != nil {
+			db.reclaimableSize += int64(oldPos.Size)
 		}
 	}
 
@@ -500,7 +540,7 @@ func (db *DB) loadIndexFromDataFiles() error {
 			}
 
 			// Build the index
-			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset}
+			logRecordPos := &data.LogRecordPos{Fid: fileId, Offset: offset, Size: uint32(size)}
 
 			// Get the sequence number of the log record key
 			realKey, seqNo := parseLogRecordKey(logRecord.Key)

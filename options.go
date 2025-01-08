@@ -3,12 +3,13 @@ package bitcask
 import "os"
 
 type Options struct {
-	DirPath         string      // DB directory path
-	MaxDataFileSize int64       // Maximum log file size
-	SyncWrites      bool        // Whether to sync writes to disk
-	IndexType       IndexerType // Indexer type
-	BytesPerSync    uint        // Number of bytes to write before syncing
-	MMapAtStartup   bool        // Whether to memory-map the data files at startup
+	DirPath            string      // DB directory path
+	MaxDataFileSize    int64       // Maximum log file size
+	SyncWrites         bool        // Whether to sync writes to disk
+	IndexType          IndexerType // Indexer type
+	BytesPerSync       uint        // Number of bytes to write before syncing
+	MMapAtStartup      bool        // Whether to memory-map the data files at startup
+	DataFileMergeRatio float32     // The ratio of the number of data files to merge
 }
 
 type IteratorOptions struct {
@@ -31,12 +32,13 @@ const (
 )
 
 var DefaultOptions = Options{
-	DirPath:         os.TempDir(),
-	MaxDataFileSize: 256 * 1024 * 1024, // 256MB
-	SyncWrites:      false,
-	BytesPerSync:    0,
-	IndexType:       BTree,
-	MMapAtStartup:   true,
+	DirPath:            os.TempDir(),
+	MaxDataFileSize:    256 * 1024 * 1024, // 256MB
+	SyncWrites:         false,
+	BytesPerSync:       0,
+	IndexType:          BTree,
+	MMapAtStartup:      true,
+	DataFileMergeRatio: 0.5,
 }
 
 var DefaultIteratorOptions = &IteratorOptions{

@@ -36,6 +36,7 @@ type LogRecordHeader struct {
 type LogRecordPos struct {
 	Fid    uint32 // File ID
 	Offset int64  // Offset in the file
+	Size   uint32 // data size of the log record
 }
 
 // TransactionRecord is a struct that temporarily store a transaction record.
@@ -71,10 +72,11 @@ func EncodeLogRecord(logRecord *LogRecord) ([]byte, int64) {
 
 // EncodeLogRecordPos encodes a log record position to a byte slice.
 func EncodeLogRecordPos(pos *LogRecordPos) []byte {
-	buf := make([]byte, binary.MaxVarintLen32+binary.MaxVarintLen64)
+	buf := make([]byte, binary.MaxVarintLen32*2+binary.MaxVarintLen64)
 	var index = 0
 	index += binary.PutVarint(buf[index:], int64(pos.Fid))
 	index += binary.PutVarint(buf[index:], pos.Offset)
+	index += binary.PutVarint(buf[index:], int64(pos.Size))
 	return buf[:index]
 }
 
@@ -83,10 +85,13 @@ func DecodeLogRecordPos(buf []byte) *LogRecordPos {
 	var index = 0
 	fileId, n := binary.Varint(buf[index:])
 	index += n
-	offset, _ := binary.Varint(buf[index:])
+	offset, n := binary.Varint(buf[index:])
+	index += n
+	size, _ := binary.Varint(buf[index:])
 	return &LogRecordPos{
 		Fid:    uint32(fileId),
 		Offset: offset,
+		Size:   uint32(size),
 	}
 }
 
