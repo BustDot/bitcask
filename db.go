@@ -220,6 +220,14 @@ func (db *DB) Stat() *Stat {
 	}
 }
 
+// Backup creates a backup of the database in the given directory.
+func (db *DB) Backup(dir string) error {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	return utils.CopyDir(db.options.DirPath, dir, []string{fileLockName})
+}
+
 // Put writes a key-value pair to the database. Key cannot be empty.
 func (db *DB) Put(key []byte, value []byte) error {
 	if len(key) == 0 {
