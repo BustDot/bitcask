@@ -204,3 +204,95 @@ func (rds *RedisDataStructure) findMetadata(key []byte, dataType RedisDataType) 
 	}
 	return meta, nil
 }
+
+// ======================== Set ========================
+
+func (rds *RedisDataStructure) SAdd(key []byte, member []byte) (bool, error) {
+	meta, err := rds.findMetadata(key, Set)
+	if err != nil {
+		return false, err
+	}
+
+	// Construct setInternalKey
+	sk := &setInternalKey{
+		key:     key,
+		version: meta.version,
+		member:  member,
+	}
+
+	var ok bool
+	if _, err := rds.db.Get(sk.encode()); errors.Is(err, bitcask.ErrKeyNotFound) {
+		wb := rds.db.NewWriteBatch(bitcask.DefaultWriteBatchOptions)
+		_ = wb.Put(sk.encode(), nil)
+		meta.size++
+		_ = wb.Put(key, meta.encode())
+		if err = wb.Commit(); err != nil {
+			return false, err
+		}
+		ok = true
+	}
+
+	return ok, nil
+}
+
+func (rds *RedisDataStructure) SIsMember(key []byte, member []byte) (bool, error) {
+	meta, err := rds.findMetadata(key, Set)
+	if err != nil {
+		return false, err
+	}
+
+	if meta.size == 0 {
+		return false, nil
+	}
+
+	// Construct setInternalKey
+	sk := &setInternalKey{
+		key:     key,
+		version: meta.version,
+		member:  member,
+	}
+
+	_, err = rds.db.Get(sk.encode())
+	if err != nil && !errors.Is(err, bitcask.ErrKeyNotFound) {
+		return false, err
+	}
+	if errors.Is(err, bitcask.ErrKeyNotFound) {
+		return false, nil
+	}
+
+	return true, nil
+}
+
+func (rds *RedisDataStructure) SRem(key []byte, member []byte) (bool, error) {
+	meta, err := rds.findMetadata(key, Set)
+	if err != nil {
+		return false, err
+	}
+
+	if meta.size == 0 {
+		return false, nil
+	}
+
+	// Construct setInternalKey
+	sk := &setInternalKey{
+		key:     key,
+		version: meta.version,
+		member:  member,
+	}
+	encKey := sk.encode()
+
+	// check member exist
+	if _, err := rds.db.Get(encKey); errors.Is(err, bitcask.ErrKeyNotFound) {
+		return false, nil
+	}
+
+	wb := rds.db.NewWriteBatch(bitcask.DefaultWriteBatchOptions)
+	_ = wb.Delete(encKey)
+	meta.size--
+	_ = wb.Put(key, meta.encode())
+	if err = wb.Commit(); err != nil {
+		return false, err
+	}
+
+	return true, nil
+}
