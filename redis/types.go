@@ -35,6 +35,10 @@ func NewRedisDataStructure(options bitcask.Options) (*RedisDataStructure, error)
 	return &RedisDataStructure{db: db}, nil
 }
 
+func (rds *RedisDataStructure) Close() error {
+	return rds.db.Close()
+}
+
 // ======================== String ========================
 
 func (rds *RedisDataStructure) Set(key []byte, ttl time.Duration, value []byte) error {
